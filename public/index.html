@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Server</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+      const socket = io({
+        extraHeaders: {
+          type: 1,
+          phone: "9998082351",
+        },
+      });
+    </script>
+    <script>
+      socket.on("callDeclined", () => {
+        alert("Declined");
+      });
+      function callUser() {
+        socket.emit(
+          "call",
+          JSON.stringify({
+            to: "7016783094",
+            type: "offer",
+            offer: "TEST",
+          }),
+          (response) => {
+            console.log(response.status); // ok
+          }
+        );
+      }
+
+      function cancleCall() {
+        socket.emit("cancelCall", "7016783094");
+      }
+    </script>
+  </head>
+  <body>
+    <h1>Welcome To Server</h1>
+    <button onclick="callUser()">CAll</button>
+    <button onclick="cancleCall()">End</button>
+  </body>
+</html>
