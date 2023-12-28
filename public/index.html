@@ -20,12 +20,7 @@
       });
       function callUser() {
         socket.emit(
-          "call",
-          JSON.stringify({
-            to: "7016783094",
-            type: "offer",
-            offer: "TEST",
-          }),
+          "call","+917016783094",
           (response) => {
             console.log(response.status); // ok
           }

@@ -77,30 +77,22 @@ const users = new Map();
 io.on("connection", (socket) => {
   // Save Presence
   var phone = socket.handshake.headers.phone;
-  var type = socket.handshake.headers.type;
-
-  if (type == 1) {
-    users.set(phone, socket.id);
-  }
+  console.log(phone);
+  if (!phone) return;
+  users.set(phone, socket.id);
 
   // Call Request
   socket.on("call", async (to, callback) => {
-    var callRequestInfo = { to: to };
-    callRequestInfo.from = phone;
+    var callRequestInfo = { to: to, from: phone };
+    console.log(callRequestInfo);
     // Check For Presence
-    var presenceStatus = users.has(callRequestInfo.to);
-    if (presenceStatus) {
+    if (users.has(callRequestInfo.to)) {
       // Online And Send Call Via Socket
-      let toId = users.get(callRequestInfo.to);
-      io.to(toId).emit("call", JSON.stringify(callRequestInfo));
-      callback({
-        status: "OK",
-      });
+      let toSocketId = users.get(callRequestInfo.to);
+      io.to(toSocketId).emit("call", JSON.stringify(callRequestInfo));
     } else {
+      return;
       // Offline And Send Push Notification
-      // console.log("User Offline");
-      // console.log("Fetching FCM Token");
-      console.log(to);
       let userDoc = await fireStore
         .collection("users")
         .doc(callRequestInfo.to)
@@ -125,9 +117,7 @@ io.on("connection", (socket) => {
           console.log("Error sending message:", error);
         });
     }
-    callback({
-      status: "OK",
-    });
+    // callback({ status: "OK" });
   });
 
   // Cancle Call Request
@@ -172,28 +162,25 @@ io.on("connection", (socket) => {
   });
 
   socket.on("callAccepted", (to) => {
-    console.log("ACCEPTED");
     var presenceStatus = users.has(to);
     if (presenceStatus) {
       io.to(users.get(to)).emit("callAccepted");
     }
   });
 
-  socket.on("callOffer", (data) => {
+  socket.on("rtcOffer", (data) => {
     var info = JSON.parse(data);
-    info.from = phone;
     var presenceStatus = users.has(info.to);
     if (presenceStatus) {
-      io.to(users.get(info.to)).emit("callOffer", JSON.stringify(info));
+      io.to(users.get(info.to)).emit("rtcOffer", data);
     }
   });
 
-  socket.on("answerOffer", (data) => {
+  socket.on("rtcAnswer", (data) => {
     var info = JSON.parse(data);
-    info.from = phone;
     var presenceStatus = users.has(info.to);
     if (presenceStatus) {
-      io.to(users.get(info.to)).emit("answerOffer", JSON.stringify(info));
+      io.to(users.get(info.to)).emit("rtcAnswer", data);
     }
   });
 
@@ -207,9 +194,7 @@ io.on("connection", (socket) => {
 
   // Clear Presence
   socket.on("disconnect", () => {
-    if (type == 1) {
-      users.delete(phone);
-    }
+    users.delete(phone);
   });
 });
 
