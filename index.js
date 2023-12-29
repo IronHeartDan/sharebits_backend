@@ -1,203 +1,161 @@
+require('dotenv').config()
 const express = require("express");
-const app = express();
 const { createServer } = require("http");
-const httpServer = createServer(app);
 const { Server } = require("socket.io");
-const io = new Server(httpServer, {});
-const { createClient } = require("redis");
 const { createAdapter } = require("@socket.io/redis-adapter");
-const PORT = process.env.PORT || 3000;
+const { createClient } = require("redis");
+
+// Init
+const app = express();
+const httpServer = createServer(app);
+const io = new Server(httpServer, {});
+const redisClient = createClient({ url: process.env.REDIS_URL });
+const PORT = process.env.PORT;
 
 // Firebase
 const { initializeApp, cert } = require("firebase-admin/app");
-const { getAuth } = require("firebase-admin/auth");
-const { getFirestore } = require("firebase-admin/firestore");
 const { getMessaging } = require("firebase-admin/messaging");
 
-const serviceAccount = require("./key.json");
+const serviceAccount = require("./share-bits-firebase-adminsdk.json");
 
-const firebaseApp = initializeApp({
+initializeApp({
   credential: cert(serviceAccount),
 });
 
-const fireStore = getFirestore();
-
 // REST API
-
 app.use(express.json());
-app.use(express.static("public"));
 
 app.get("/", (req, res) => {
-  res.status(200).sendFile("index.html");
+  res.status(200).send("Server Live");
 });
 
-app.post("/users", async (req, res) => {
-  var body = req.body;
-  if (body) {
-    let phoneNumbers = body.phoneNumbers;
-    let found = [];
-    for (let i = 0; i < phoneNumbers.length; i += 100) {
-      let users = await getAuth().getUsers(
-        phoneNumbers.slice(i, Math.min(i + 99, phoneNumbers.length))
-      );
-      if (users.users.length > 0) {
-        users.users.forEach((user) => {
-          found.push(user.phoneNumber);
-        });
-      }
-    }
-
-    res.status(200).send(found);
-  } else {
-    console.log("Empty Body");
-    res.status(400).send("Empty Body");
+function insertConnectedUser(phoneNumber, socketId) {
+  try {
+    redisClient.hSet("connected_users", phoneNumber, socketId);
+  } catch (err) {
+    console.log(err);
   }
-});
+}
 
-app.post("/rejectCall", (req, res) => {
-  var presenceStatus = users.has(req.body.who);
-  if (presenceStatus) {
-    io.to(users.get(req.body.who)).emit("callDeclined");
-    res.status(200).send();
+async function isUserOnline(phoneNumber) {
+  try {
+    let result = await redisClient.hGet("connected_users", phoneNumber);
+    if (result) return result;
+    return null;
+  } catch (err) {
+    console.log(err);
+    return null;
   }
-  res.status(404).send();
-});
+}
 
-// Socket Implementation
-const users = new Map();
-// try {
-//   const pubClient = createClient({ url: "redis://localhost:6379" });
-//   const subClient = pubClient.duplicate();
+function removeConnectedUser(phoneNumber) {
+  try {
+    redisClient.hDel("connected_users", phoneNumber);
+  } catch (err) {
+    console.log(err);
+  }
+}
 
-//   io.adapter(createAdapter(pubClient, subClient));
-// } catch (error) {
-//   console.log(error);
-// }
+async function sendPushNotification(phone, notificationData) {
+  let registrationTokens = [];
+  const message = {
+    data: {
+      payload: JSON.stringify(notificationData),
+    },
+    android: {
+      ttl: 0,
+    },
+    tokens: registrationTokens,
+  };
+}
 
 io.on("connection", (socket) => {
   // Save Presence
-  var phone = socket.handshake.headers.phone;
-  console.log(phone);
+  const phone = socket.handshake.headers.phone;
+  console.log(`Connected : ${phone}`);
   if (!phone) return;
-  users.set(phone, socket.id);
+  insertConnectedUser(phone, socket.id);
 
   // Call Request
-  socket.on("call", async (to, callback) => {
-    var callRequestInfo = { to: to, from: phone };
-    console.log(callRequestInfo);
+  socket.on("call", async (to) => {
+    const callRequestInfo = { to: to, from: phone };
     // Check For Presence
-    if (users.has(callRequestInfo.to)) {
+    const toSocketId = await isUserOnline(to);
+    if (toSocketId) {
       // Online And Send Call Via Socket
-      let toSocketId = users.get(callRequestInfo.to);
       io.to(toSocketId).emit("call", JSON.stringify(callRequestInfo));
     } else {
-      return;
       // Offline And Send Push Notification
-      let userDoc = await fireStore
-        .collection("users")
-        .doc(callRequestInfo.to)
-        .get();
-      let registrationTokens = userDoc.data().tokens;
-      const message = {
-        data: {
-          payload: JSON.stringify(callRequestInfo),
-        },
-        android: {
-          ttl: 0,
-        },
-        tokens: registrationTokens,
-      };
-      getMessaging()
-        .sendMulticast(message)
-        .then((response) => {
-          // Response is a message ID string.
-          console.log("Successfully sent message:", response);
-        })
-        .catch((error) => {
-          console.log("Error sending message:", error);
-        });
     }
-    // callback({ status: "OK" });
   });
 
   // Cancle Call Request
-  socket.on("cancelCall", async (who) => {
+  socket.on("cancelCall", async (to) => {
     // Check For Presence
-    var presenceStatus = users.has(who);
-    if (presenceStatus) {
+    const toSocketId = await isUserOnline(to);
+    if (toSocketId) {
       // Online And Send Call Via Socket
-      let toId = users.get(who);
-      io.to(toId).emit("cancle");
+      io.to(toSocketId).emit("cancle");
     } else {
       // Offline And Send Push Notification
-      // console.log("User Offline");
-      // console.log("Fetching FCM Token");
-      // let userDoc = await fireStore.collection("users").doc(who).get();
-      // let registrationTokens = userDoc.data().tokens;
-      // console.log(registrationTokens);
-      // const message = {
-      //   notification: {
-      //     title: "Missed Call",
-      //     body: `You have a missed call from ${phone}`,
-      //   },
-      //   tokens: registrationTokens,
-      // };
-      // getMessaging()
-      //   .sendMulticast(message)
-      //   .then((response) => {
-      //     // Response is a message ID string.
-      //     console.log("Successfully sent message:", response);
-      //   })
-      //   .catch((error) => {
-      //     console.log("Error sending message:", error);
-      //   });
     }
   });
 
-  socket.on("callDeclined", (info) => {
-    var presenceStatus = users.has(info);
-    if (presenceStatus) {
-      io.to(users.get(info)).emit("callDeclined");
+  socket.on("callDeclined", async (to) => {
+    const toSocketId = await isUserOnline(to);
+    if (toSocketId) {
+      io.to(toSocketId).emit("callDeclined");
     }
   });
 
-  socket.on("callAccepted", (to) => {
-    var presenceStatus = users.has(to);
-    if (presenceStatus) {
-      io.to(users.get(to)).emit("callAccepted");
+  socket.on("callAccepted", async (to) => {
+    const toSocketId = await isUserOnline(to);
+    if (toSocketId) {
+      io.to(toSocketId).emit("callAccepted");
     }
   });
 
-  socket.on("rtcOffer", (data) => {
+  socket.on("rtcOffer", async (data) => {
     var info = JSON.parse(data);
-    var presenceStatus = users.has(info.to);
-    if (presenceStatus) {
-      io.to(users.get(info.to)).emit("rtcOffer", data);
+    const toSocketId = await isUserOnline(info.to);
+    if (toSocketId) {
+      io.to(toSocketId).emit("rtcOffer", data);
     }
   });
 
-  socket.on("rtcAnswer", (data) => {
+  socket.on("rtcAnswer", async (data) => {
     var info = JSON.parse(data);
-    var presenceStatus = users.has(info.to);
-    if (presenceStatus) {
-      io.to(users.get(info.to)).emit("rtcAnswer", data);
+    const toSocketId = await isUserOnline(info.to);
+    if (toSocketId) {
+      io.to(toSocketId).emit("rtcAnswer", data);
     }
   });
 
-  socket.on("iceCandidate", (data) => {
+  socket.on("iceCandidate", async (data) => {
     var info = JSON.parse(data);
-    var presenceStatus = users.has(info.to);
-    if (presenceStatus) {
-      io.to(users.get(info.to)).emit("iceCandidate", data);
+    const toSocketId = await isUserOnline(info.to);
+    if (toSocketId) {
+      io.to(toSocketId).emit("iceCandidate", data);
     }
   });
 
   // Clear Presence
-  socket.on("disconnect", () => {
-    users.delete(phone);
+  socket.on("disconnect", async () => {
+    console.log(`Disconnected : ${phone}`);
+    removeConnectedUser(phone);
   });
 });
 
-httpServer.listen(PORT, () => {
-  console.log(`Server Live -> ${PORT}`);
-});
+const pubClient = redisClient.duplicate();
+const subClient = redisClient.duplicate();
+
+Promise.all([redisClient.connect(), pubClient.connect(), subClient.connect()])
+  .then(() => {
+    io.adapter(createAdapter(pubClient, subClient));
+    httpServer.listen(PORT, () => {
+      console.log(`Server Live -> ${PORT}`);
+    });
+  })
+  .catch((err) => {
+    console.log(err);
+  });
