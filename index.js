@@ -1,4 +1,6 @@
-require('dotenv').config()
+if (!process.env.PRODUCTION) {
+  require("dotenv").config();
+}
 const express = require("express");
 const { createServer } = require("http");
 const { Server } = require("socket.io");
@@ -22,35 +24,58 @@ initializeApp({
   credential: cert(serviceAccount),
 });
 
-// REST API
-app.use(express.json());
-
-app.get("/", (req, res) => {
-  res.status(200).send("Server Live");
-});
-
-function insertConnectedUser(phoneNumber, socketId) {
+async function insertNewUser(phoneNumber) {
   try {
-    redisClient.hSet("connected_users", phoneNumber, socketId);
+    const result = await redisClient.hSet(
+      "users",
+      phoneNumber,
+      JSON.stringify({ isOnline: false, socketId: null })
+    );
+    return result === 1;
   } catch (err) {
     console.log(err);
+    return false;
+  }
+}
+
+async function getAllUsers(phoneNumbers) {
+  try {
+    return await redisClient.hmGet("users", phoneNumbers);
+  } catch (err) {
+    console.log(err);
+    return null;
   }
 }
 
 async function isUserOnline(phoneNumber) {
   try {
-    let result = await redisClient.hGet("connected_users", phoneNumber);
-    if (result) return result;
-    return null;
+    const user = await redisClient.hGet("users", phoneNumber);
+    if (user.isOnline) {
+      return user.socketId;
+    } else {
+      return null;
+    }
   } catch (err) {
     console.log(err);
     return null;
   }
 }
 
-function removeConnectedUser(phoneNumber) {
+function removeUser(phoneNumber) {
   try {
-    redisClient.hDel("connected_users", phoneNumber);
+    redisClient.hDel("users", phoneNumber);
+  } catch (err) {
+    console.log(err);
+  }
+}
+
+function updateUserPresence(phoneNumber, isOnline = false, socketId = null) {
+  try {
+    redisClient.hSet(
+      "users",
+      phoneNumber,
+      JSON.stringify({ isOnline: isOnline, socketId: socketId })
+    );
   } catch (err) {
     console.log(err);
   }
@@ -74,7 +99,7 @@ io.on("connection", (socket) => {
   const phone = socket.handshake.headers.phone;
   console.log(`Connected : ${phone}`);
   if (!phone) return;
-  insertConnectedUser(phone, socket.id);
+  updateUserPresence(phone, true, socket.id);
 
   // Call Request
   socket.on("call", async (to) => {
@@ -142,8 +167,46 @@ io.on("connection", (socket) => {
   // Clear Presence
   socket.on("disconnect", async () => {
     console.log(`Disconnected : ${phone}`);
-    removeConnectedUser(phone);
+    updateUserPresence(phone);
   });
+});
+
+// REST API
+app.use(express.json());
+
+app.get("/", (req, res) => {
+  res.status(200).send("Share Bits Server");
+});
+
+app.get("/health", (req, res) => {
+  res.status(200).send("OK");
+});
+
+app.post("/registerUser", (req, res) => {
+  const phoneNumber = req.body.phoneNumber;
+  if (!phoneNumber) {
+    res.status(400).send("Invalid Request Body");
+  }
+  insertNewUser(phoneNumber);
+  res.status(200).send("User Registered");
+});
+
+app.post("/deleteUser", (req, res) => {
+  const phoneNumber = req.body.phoneNumber;
+  if (!phoneNumber) {
+    res.status(400).send("Invalid Request Body");
+  }
+  removeUser(phoneNumber);
+  res.status(200).send("User Unregistered");
+});
+
+app.post("syncContacts", async (req, res) => {
+  const phoneNumbers = req.body.phoneNumbers;
+  if (!phoneNumbers) {
+    res.status(400).send("Invalid Request Body");
+  }
+  const users = await getAllUsers(phoneNumbers);
+  res.status(200).send(users);
 });
 
 const pubClient = redisClient.duplicate();
