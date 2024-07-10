@@ -38,6 +38,16 @@ async function insertNewUser(phoneNumber) {
   }
 }
 
+async function isUserExists(phoneNumber) {
+  try {
+    const result = await redisClient.hExists("users", phoneNumber);
+    return result === 1;
+  } catch (err) {
+    console.log(err);
+    return false;
+  }
+}
+
 async function getAllUsers(phoneNumbers) {
   try {
     return await redisClient.hmGet("users", phoneNumbers);
